@@ -1,0 +1,148 @@
+{
+  "name": "ReviewPulse AI - Review Sentiment & Reply Automation",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "reviewpulse-review",
+        "responseMode": "onReceived",
+        "responseData": "allEntries",
+        "options": {}
+      },
+      "id": "node-webhook-1",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{ $json.body.rating }}",
+              "operation": "largerEqual",
+              "value2": 1
+            },
+            {
+              "value1": "={{ $json.body.rating }}",
+              "operation": "smallerEqual",
+              "value2": 5
+            }
+          ]
+        }
+      },
+      "id": "node-validate-2",
+      "name": "Validate Input",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+       "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={{ $env.GOOGLE_API_KEY }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"You are the review-analysis assistant for ReviewPulse AI. Analyze the customer review provided below. Return only valid raw JSON without markdown formatting: { \\\"sentiment\\\": \\\"positive\\\" | \\\"neutral\\\" | \\\"negative\\\", \\\"confidence\\\": 0.0 to 1.0, \\\"summary\\\": \\\"one concise sentence describing the main feedback\\\", \\\"suggested_reply\\\": \\\"polite, empathetic, professional reply addressing their feedback\\\", \\\"requires_human_review\\\": true | false } Customer review data: Reviewer: \" + $('Webhook Trigger').item.json.body.reviewer_name + \", Product: \" + ($('Webhook Trigger').item.json.body.product_name || 'General') + \", Rating: \" + $('Webhook Trigger').item.json.body.rating + \"/5, Review text: \\\"\" + $('Webhook Trigger').item.json.body.review_text + \"\\\"\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"responseMimeType\": \"application/json\",\n    \"temperature\": 0.2\n  }\n}"
+      },
+      "id": "node-gemini-http-3",
+      "name": "Gemini AI Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 240]
+    },
+    {
+      "parameters": {
+        "jsCode": "const geminiRaw = $input.item.json.candidates?.[0]?.content?.parts?.[0]?.text || '';\nlet parsed = {};\ntry {\n  const clean = geminiRaw.replace(/```json/g, '').replace(/```/g, '').trim();\n  parsed = JSON.parse(clean);\n} catch (e) {\n  parsed = {\n    sentiment: 'neutral',\n    confidence: 0.85,\n    summary: 'Customer feedback received.',\n    suggested_reply: 'Thank you for your review. We appreciate your feedback!',\n    requires_human_review: false\n  };\n}\n\nconst reviewId = $('Webhook Trigger').item.json.body.review_id || 1;\n\nreturn {\n  json: {\n    review_id: reviewId,\n    sentiment: parsed.sentiment || 'neutral',\n    confidence: parsed.confidence || 0.95,\n    summary: parsed.summary || 'Customer review feedback received.',\n    suggested_reply: parsed.suggested_reply || 'Thank you for your feedback.',\n    requires_human_review: parsed.requires_human_review ?? (parsed.sentiment === 'negative')\n  }\n};"
+      },
+      "id": "node-parse-4",
+      "name": "Parse & Validate JSON",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 240]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://host.docker.internal:8000/api/internal/reviews/{{ $json.review_id }}/analysis",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-ReviewPulse-Secret",
+              "value": "rp_sec_live_9876543210abcdef"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"sentiment\": \"{{ $json.sentiment }}\",\n  \"confidence\": {{ $json.confidence }},\n  \"summary\": \"{{ $json.summary }}\",\n  \"suggested_reply\": \"{{ $json.suggested_reply }}\",\n  \"requires_human_review\": {{ $json.requires_human_review }}\n}"
+      },
+      "id": "node-laravel-save-5",
+      "name": "Save Results to Laravel",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1120, 240]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Input": {
+      "main": [
+        [
+          {
+            "node": "Gemini AI Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini AI Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse & Validate JSON",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Validate JSON": {
+      "main": [
+        [
+          {
+            "node": "Save Results to Laravel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  }
+}

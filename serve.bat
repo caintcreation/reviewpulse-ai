@@ -1,0 +1,3 @@
+@echo off
+echo Starting ReviewPulse AI Development Server...
+"C:\Users\user\.config\herd\bin\php84\php.exe" artisan serve
